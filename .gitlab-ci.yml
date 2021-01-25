@@ -30,10 +30,10 @@ make-image:
     name: "sdimage-$CI_COMMIT_SHA"
     paths:
     - sdcard.img.zip
-    - rootfs.squashfs
+    - update.zip
     - build.log
     when: always
   cache:
     key: "$CI_JOB_NAME-$CI_COMMIT_REF_SLUG"
     paths:
-      - buildroot/output/
+    - buildroot/output/

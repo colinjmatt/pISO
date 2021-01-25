@@ -152,7 +152,10 @@ impl VirtualDrive {
         ).into())
     }
 
-    pub fn mount_internal(&mut self, disp: &mut DisplayManager) -> Result<()> {
+    pub fn mount_internal<'a, 'b>(
+        &'a mut self,
+        disp: &'b mut DisplayManager,
+    ) -> Result<&'a MountInfo> {
         match self.state {
             MountState::Unmounted => {
                 let volume_path = &self.volume.path.to_string_lossy();
@@ -185,7 +188,8 @@ impl VirtualDrive {
                             "Failed to determine partition number".into(),
                         ))?;
 
-                        let mount_folder_name = format!("{}p{}", self.volume.name, part_num);
+                        let part_name = utils::translate_drive_name(&self.name(), &self.config);
+                        let mount_folder_name = format!("{} (partition {})", part_name, part_num);
 
                         let mount_point = Path::new(VDRIVE_MOUNT_ROOT).join(mount_folder_name);
                         fs::create_dir_all(&mount_point)?;
@@ -197,6 +201,13 @@ impl VirtualDrive {
                                 if isopath.exists() {
                                     for iso in fs::read_dir(isopath)? {
                                         let iso = iso?;
+                                        if iso.file_name()
+                                            .into_string()
+                                            .map_err(|_| ErrorKind::Msg("Invalid file name".into()))?
+                                            .starts_with(".")
+                                        {
+                                            continue;
+                                        }
                                         isos.push(iso::Iso::new(
                                             disp,
                                             self.usb.clone(),
@@ -214,9 +225,12 @@ impl VirtualDrive {
                     isos: isos,
                     loopback_path: loopback_path.to_path_buf(),
                 });
-                Ok(())
+                match &self.state {
+                    &MountState::Internal(ref info) => Ok(info),
+                    _ => unreachable!(),
+                }
             }
-            MountState::Internal(_) => Ok(()),
+            MountState::Internal(ref state) => Ok(state),
             MountState::External(_) => {
                 Err("Attempt to mount_internal while mounted external".into())
             }
@@ -232,6 +246,7 @@ impl VirtualDrive {
                 }
                 for part in info.part_mount_paths.iter() {
                     utils::run_check_output("umount", &[&part])?;
+                    fs::remove_dir_all(&part)?;
                 }
                 utils::run_check_output("losetup", &["-d", &info.loopback_path.to_string_lossy()])?;
             }
@@ -253,7 +268,8 @@ impl VirtualDrive {
             }
             MountState::External(_) => {
                 self.unmount_external()?;
-                self.mount_internal(disp)
+                self.mount_internal(disp)?;
+                Ok(())
             }
         }
     }
@@ -263,7 +279,11 @@ impl render::Render for VirtualDrive {
     fn render(&self, _manager: &DisplayManager, window: &Window) -> Result<bitmap::Bitmap> {
         let mut base = bitmap::Bitmap::new(10, 1);
         let short_size = self.size() as f64 / (1024 * 1024 * 1024) as f64;
-        let label = format!("{} ({:.1}GB)", self.name(), short_size);
+
+        // Render the 'newname' from the config
+        let render_name = utils::translate_drive_name(&self.name(), &self.config);
+
+        let label = format!("{} ({:.1}GB)", render_name, short_size);
         base.blit(&font::render_text(label), (12, 0));
         match self.state {
             MountState::External(_) => {

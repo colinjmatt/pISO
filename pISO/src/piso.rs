@@ -45,7 +45,7 @@ impl PIso {
         let ndrive = newdrive::NewDrive::new(disp, usb.clone(), vg.clone(), config.clone())?;
         let stats = stats::Stats::new(disp, vg.clone())?;
         let wifi = wifi::WifiMenu::new(disp, config)?;
-        let options = options::Options::new(disp, &vg)?;
+        let options = options::Options::new(disp, &vg, config)?;
 
         if drives.len() > 0 {
             // Focus the first drive
@@ -107,17 +107,47 @@ impl PIso {
         Ok(drives)
     }
 
-    fn add_drive(
-        &mut self,
-        disp: &mut DisplayManager,
+    fn add_drive<'a, 'b>(
+        &'a mut self,
+        disp: &'b mut DisplayManager,
         volume: lvm::LogicalVolume,
-    ) -> Result<&vdrive::VirtualDrive> {
-        let vdrive = vdrive::VirtualDrive::new(disp, self.usb.clone(), volume, &self.config)?;
+    ) -> Result<&'a mut vdrive::VirtualDrive> {
+        let mut vdrive = vdrive::VirtualDrive::new(disp, self.usb.clone(), volume, &self.config)?;
+        vdrive.mount_internal(disp)?;
         self.drives.push(vdrive);
 
         Ok(self.drives
-            .last()
+            .last_mut()
             .expect("vdrive was somehow empty after push"))
+    }
+
+    fn share_drive(drive: &mut vdrive::VirtualDrive, remove: bool) -> Result<Vec<action::Action>> {
+        if !version::read_version()?.has_wifi() {
+            return Ok(vec![]);
+        }
+        match drive.state {
+            vdrive::MountState::Unmounted | vdrive::MountState::External(_) => {
+                if remove {
+                    Ok(vec![])
+                } else {
+                    Err("Cannot share drive when not mounted internal".into())
+                }
+            }
+            vdrive::MountState::Internal(ref info) => Ok(info.part_mount_paths
+                .iter()
+                .map(|path| {
+                    let name = path.file_name()
+                        .expect("Partition has no name")
+                        .to_string_lossy()
+                        .into_owned();
+                    if remove {
+                        action::Action::SmbRemoveShare(name)
+                    } else {
+                        action::Action::SmbSharePartition(name)
+                    }
+                })
+                .collect()),
+        }
     }
 }
 
@@ -145,23 +175,27 @@ impl input::Input for PIso {
                 Ok((true, vec![]))
             }
             action::Action::CreateDrive(ref volume) => {
-                self.add_drive(disp, volume.clone())?;
-                Ok((true, vec![]))
+                let drive = self.add_drive(disp, volume.clone())?;
+                let actions = PIso::share_drive(drive, false)?;
+                Ok((true, actions))
             }
             action::Action::SnapshotDrive(ref name) => {
                 let report = self.vg.snapshot_volume(name)?;
-                self.add_drive(disp, report)?;
-                Ok((true, vec![]))
+                let drive = self.add_drive(disp, report)?;
+                let actions = PIso::share_drive(drive, false)?;
+                Ok((true, actions))
             }
             action::Action::DeleteDrive(ref name) => {
+                let mut actions = vec![];
                 if let Some(ref mut drive) =
                     self.drives.iter_mut().find(|drive| drive.name() == name)
                 {
+                    actions = PIso::share_drive(drive, true)?;
                     drive.unmount()?;
                 }
                 self.drives.retain(|drive| drive.name() != name);
                 self.vg.delete_volume(&name)?;
-                Ok((true, vec![]))
+                Ok((true, actions))
             }
             _ => Ok((false, vec![])),
         }
@@ -172,10 +206,22 @@ impl state::State for PIso {}
 
 impl Widget for PIso {
     fn mut_children(&mut self) -> Vec<&mut Widget> {
-        let mut children = self.drives
-            .iter_mut()
+        let mut ordered_children = self.drives
+                .iter_mut()
+                .collect::<Vec<&mut vdrive::VirtualDrive>>();
+
+        match self.config.ui.sort_drives {
+            Some(true) => ordered_children.sort_by(|drive1, drive2| {
+                drive1.volume.name.cmp(&drive2.volume.name)
+            }),
+            _ => ()
+        }
+
+        let mut children = ordered_children
+            .into_iter()
             .map(|vdrive| vdrive as &mut Widget)
             .collect::<Vec<&mut Widget>>();
+
         children.push(&mut self.newdrive as &mut Widget);
         if self.version.has_wifi() {
             children.push(&mut self.wifi as &mut Widget);
@@ -186,10 +232,23 @@ impl Widget for PIso {
     }
 
     fn children(&self) -> Vec<&Widget> {
-        let mut children = self.drives
+        let mut ordered_children = self.drives
             .iter()
+            .collect::<Vec<&vdrive::VirtualDrive>>();
+
+        match self.config.ui.sort_drives {
+            Some(true) => ordered_children.sort_by(|drive1, drive2| {
+                utils::translate_drive_name(&drive1.volume.name, &self.config).cmp(
+                    &utils::translate_drive_name(&drive2.volume.name, &self.config))
+            }),
+            _ => ()
+        }
+
+        let mut children = ordered_children
+            .into_iter()
             .map(|vdrive| vdrive as &Widget)
             .collect::<Vec<&Widget>>();
+
         children.push(&self.newdrive as &Widget);
         if self.version.has_wifi() {
             children.push(&self.wifi as &Widget);

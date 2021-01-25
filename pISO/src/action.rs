@@ -36,4 +36,10 @@ pub enum Action {
     ToggleDriveNonRemovable(String),
 
     FlipDisplay,
+
+    OpenVersion,
+    CloseVersion,
+
+    SmbSharePartition(String),
+    SmbRemoveShare(String),
 }

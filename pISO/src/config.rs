@@ -11,20 +11,28 @@ where
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct UiConfig {
-    pub size_step: u32,
-    pub default_size: u32,
+    pub size_step: f32,
+    pub default_size: f32,
 
     #[serde(deserialize_with = "from_millis")]
     pub min_button_press: time::Duration,
 
     #[serde(deserialize_with = "from_millis")]
     pub button_long_press: time::Duration,
+
+    pub sort_drives: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct UserConfig {
     pub name: String,
     pub password: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct DriveConfig {
+    pub name: String,
+    pub newname: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -55,6 +63,7 @@ pub struct Config {
     pub user: UserConfig,
     pub wifi: WifiConfig,
     pub ui: UiConfig,
+    pub drive: Option<Vec<DriveConfig>>,
     pub system: Option<SystemConfig>,
 }
 
@@ -70,6 +79,7 @@ mod tests {
           default_size=50
           min_button_press=300
           button_long_press=2000
+          sort_drives=true
 
           [system]
           auto_fstrim=true
@@ -77,6 +87,14 @@ mod tests {
           [user]
           name="piso"
           password="password"
+
+          [[drive]]
+          name="Drive1"
+          newname="My Name"
+
+          [[drive]]
+          name="Drive2"
+          newname="Other Drive"
 
           [[wifi.client]]
           ssid="home-ap"
@@ -98,7 +116,7 @@ mod tests {
     fn load_with_no_wifi_client() {
         let toml_str = r#"
           [ui]
-          size_step=5
+          size_step=4.2
           default_size=50
           min_button_press=300
           button_long_press=2000

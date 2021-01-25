@@ -123,7 +123,7 @@ enum DriveSizeState {
 
 struct DriveSize {
     pub window: WindowId,
-    pub current_percent: u32,
+    pub current_percent: f32,
     pub usb: Arc<Mutex<usb::UsbGadget>>,
     vg: lvm::VolumeGroup,
     state: DriveSizeState,
@@ -149,7 +149,7 @@ impl DriveSize {
 
     fn current_size(&self) -> u64 {
         let bytes = self.vg.report().expect("Failed to get vg report").vg_size as f32
-            * (self.current_percent as f32 / 100.0);
+            * (self.current_percent / 100.0);
         ((bytes as u64 + 512 - 1) / 512) * 512
     }
 }
@@ -192,11 +192,18 @@ impl input::Input for DriveSize {
                 Ok((true, vec![]))
             }
             action::Action::DecDriveSize => {
-                self.current_percent -= self.config.ui.size_step;
+                if self.current_percent - self.config.ui.size_step > 0.0 {
+                    self.current_percent -= self.config.ui.size_step;
+                }
                 Ok((true, vec![]))
             }
             action::Action::OpenFormatMenu => {
-                let menu = DriveFormat::new(disp, self.vg.clone(), self.current_size())?;
+                let menu = DriveFormat::new(
+                    disp,
+                    self.vg.clone(),
+                    self.current_size(),
+                    self.config.clone(),
+                )?;
                 disp.shift_focus(&menu);
                 self.state = DriveSizeState::Selected(menu);
                 Ok((true, vec![]))
@@ -252,6 +259,7 @@ struct DriveFormat {
     size: u64,
     selected: InitialDriveFormat,
     state: DriveFormatState,
+    config: config::Config,
 }
 
 impl DriveFormat {
@@ -259,6 +267,7 @@ impl DriveFormat {
         disp: &mut DisplayManager,
         vg: lvm::VolumeGroup,
         size: u64,
+        config: config::Config,
     ) -> error::Result<DriveFormat> {
         Ok(DriveFormat {
             windowid: disp.add_child(Position::Fixed(0, 0))?,
@@ -266,6 +275,7 @@ impl DriveFormat {
             size: size,
             selected: InitialDriveFormat::Windows,
             state: DriveFormatState::Selecting,
+            config: config,
         })
     }
 
@@ -294,8 +304,7 @@ impl DriveFormat {
     ) -> error::Result<()> {
         // First create the partition table
         match *format {
-            InitialDriveFormat::Windows
-            | InitialDriveFormat::MacOs => {
+            InitialDriveFormat::Windows | InitialDriveFormat::MacOs => {
                 utils::run_check_output(
                     "parted",
                     &[
@@ -425,12 +434,12 @@ impl input::Input for DriveFormat {
                     return Ok((false, vec![]));
                 }
                 _ => {
-                    let count = self.vg.volumes()?.len() + 1;
-
-                    let name = format!("Drive{}", count);
+                    let name = utils::next_available_drive_name(&self.vg)?;
                     let mut volume = self.vg.create_volume(&name, self.size)?;
 
-                    DriveFormat::format_volume(&mut volume, &self.selected, &name)?;
+                    let part_name = utils::translate_drive_name(&name, &self.config);
+
+                    DriveFormat::format_volume(&mut volume, &self.selected, &part_name)?;
 
                     self.state = DriveFormatState::Done;
                     return Ok((
